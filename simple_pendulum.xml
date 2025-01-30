@@ -1,0 +1,27 @@
+<mujoco model="simple_pendulum">
+    <compiler angle="radian" />
+
+    <!-- Default settings for joints and geoms -->
+    <default>
+        <joint armature="0.01" damping="0.01" stiffness="0" limited="true" />
+        <geom friction="0.6 0.1 0.1" solref="0.02 1" solimp="0.9 0.95 0.001" />
+    </default>
+
+    <!-- World -->
+    <worldbody>
+        <!-- A fixed base -->
+        <body name="base" pos="0 0 0">
+            <! geom name="base_geom" type="sphere" size="0.05" rgba="0.2 0.2 0.2 1" />
+            <!-- The pendulum -->
+            <body name="pendulum" pos="0 0 0.1">
+                <joint name="hinge" type="hinge" axis="0 1 0" range="-180 180" />
+                <geom name="pendulum_geom" type="capsule" pos="0 0 0.5" size="0.02 0.5" rgba="0.8 0.3 0.3 1" />
+            </body>
+        </body>
+    </worldbody>
+
+    <!-- Actuation -->
+    <actuator>
+        <motor joint="hinge" ctrlrange="-1 1" ctrllimited="true" />
+    </actuator>
+</mujoco>
