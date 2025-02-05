@@ -28,8 +28,8 @@ def key_listener():  # Function to listen for keypress
             reset_requested = True
 
 # Start the key listener thread
-key_thread = threading.Thread(target=key_listener, daemon=True)
-key_thread.start()
+#  key_thread = threading.Thread(target=key_listener, daemon=True)
+# key_thread.start()
 
 def reset_simulation():
     msm_linear_rack.reset()

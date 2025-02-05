@@ -1,0 +1,6 @@
+Simple MLPs with two or three layers can maintain a control with a fixed setpoint
+
+For random setpoint system was tested
+        net_arch=[256, 256, 512],  # hidden layers with VALUE neurons each
+        activation_fn=torch.nn.ReLU
+for 3e7 steps. Not converged, no progress

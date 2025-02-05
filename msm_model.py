@@ -9,6 +9,7 @@ import random
 
 import utils
 
+import matplotlib
 import matplotlib.pyplot as plt
 
 class MSMLinear():
@@ -29,7 +30,7 @@ class MSMLinear():
                  tb_type=1,
                  controller_type="closed_loop",
                  steps_per_call=None,
-                 control_on_callback=True):
+                 control_on_callback=False):
 
         self.tb_type = tb_type
         self.tooth_type = tooth_type
@@ -77,6 +78,9 @@ class MSMLinear():
         self.rack_init_pos = self.data.qpos[self.rack_joint_id]
         self.rack_actuator_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR,"rack_actuator")
         self.set_rack_load()
+
+        matplotlib.use('TkAgg')
+        #matplotlib.use('Qt5Agg')
 
         #mujoco.set_mjcb_passive(self.onstep_computation)  # can this line be called in the desired way?
         if self.control_on_callback:
@@ -483,6 +487,9 @@ class MSMLinear():
         rack_phase, _ = math.modf(abs(rack_phase) / self.tooth_pitch)
         self.simulation_data["rack_phase"] = np.append(self.simulation_data["rack_phase"], rack_phase)
 
+    def collect_velocity_setpoint(self, velocity_setpoint):
+        self.simulation_data["velocity_setpoint"] = np.append(self.simulation_data["velocity_setpoint"], velocity_setpoint)
+
     def onstep_computation(self, model=None, data=None):
         """
         Function to compute all on-step actions in simulation
@@ -519,15 +526,19 @@ class MSMLinear():
             "rack_tanh_acc": np.zeros(utils.sequence_length),
             "rack_phase": np.zeros(utils.sequence_length),
             "control_value": np.zeros(utils.sequence_length),
+            "velocity_setpoint": np.zeros(utils.sequence_length),
         }
         self._collect_controller_data()
 
     def plot_rack_instant_velocity(self):
         time_vec = self.simulation_data["time"][1:]
         instant_vel_vec = self.simulation_data["rack_vel"][1:]
+        desired_vel_vec = self.simulation_data["velocity_setpoint"][1:]
         # Plot results
         plt.figure(figsize=(8, 4))
         plt.plot(time_vec, instant_vel_vec, label="Rack Velocity, m/s")
+        if len(desired_vel_vec) > utils.sequence_length:
+            plt.plot(time_vec, desired_vel_vec, label="Desired Velocity, m/s")
         plt.xlabel("Time (s)")
         plt.ylabel("Instant Velocity")
         plt.title("Instant velocity Over Time")
@@ -538,9 +549,12 @@ class MSMLinear():
     def plot_rack_average_velocity(self):
         time_vec = self.simulation_data["time"][(utils.sequence_length + 1):]
         vel_data = np.divide(self.simulation_data["rack_pos"][(utils.sequence_length + 1):], time_vec)
+        desired_vel_vec = self.simulation_data["velocity_setpoint"][(utils.sequence_length + 1):]
         # Plot results
         plt.figure(figsize=(8, 4))
         plt.plot(time_vec, vel_data, label="Average Velocity (m/s)")
+        if len(desired_vel_vec) > utils.sequence_length:
+            plt.plot(time_vec, desired_vel_vec, label="Desired Velocity, m/s")
         plt.xlabel("Time (s)")
         plt.ylabel("Average Velocity")
         plt.title("Joint Position Over Time")
@@ -606,13 +620,15 @@ class MSM_Environment(gym.Env):
         self.environment = MSMLinear(tb_type=1,
                                 controller_type="closed_loop")
 
-        self.simulation_time = 0.2  # seconds
-        self.velocity_setpoint = 0.012
+        self.simulation_time = 0.05  # seconds
+        self.velocity_setpoint = 0.002
         self.velocity_setpoint_list = np.array([])
         self.randomize_setpoint = randomize_setpoint
         self.cur_step = 1
         self.total_reward = 0
         self.return_observation_sequence = return_observation_sequence  # if True, obs matrix will be returned with sequence lengths equal to one defined in utils
+        self.episode_reward_list = np.array([])
+
 
         if self.randomize_setpoint:
             print("random setpoint option is set")
@@ -621,7 +637,13 @@ class MSM_Environment(gym.Env):
 
     def _get_observation(self):
         if self.return_observation_sequence:
-            pass  # TODO
+            obs = [
+                self.environment.simulation_data["rack_phase"][-utils.sequence_length:],
+                self.environment.simulation_data["rack_vel"][-utils.sequence_length:],
+                self.environment.simulation_data["rack_tanh_acc"][-utils.sequence_length:],
+                self.environment.simulation_data["velocity_setpoint"][-utils.sequence_length:]
+            ]
+            obs = np.transpose(np.array(obs))
         else:
             obs = [
                            self.environment.simulation_data["rack_phase"][-1],
@@ -634,6 +656,7 @@ class MSM_Environment(gym.Env):
     def step(self, action):
         info = {}
         self.environment.sim_step(action)
+        self.environment.collect_velocity_setpoint(self.velocity_setpoint)  # duplicating self.velocity_setpoint_list
         observation = self._get_observation()
         # reward = -(self.velocity_setpoint - self.environment.simulation_data["rack_vel"][-1]) ** 2
         reward = -( ((self.velocity_setpoint - self.environment.simulation_data["rack_vel"][-1]) * 1000) **2 ) \
@@ -645,9 +668,9 @@ class MSM_Environment(gym.Env):
         terminated = (self.environment.simulation_data["time"][-1] > self.simulation_time)
         truncated = False  # TODO check if that is a correct approach
 
-        if abs(self.environment.simulation_data["rack_pos"][-1]) > 0.3:
+        if abs(self.environment.simulation_data["rack_pos"][-1]) > 0.2:
             terminated = True
-            reward -= 1000  # extra penalty for dropping the rack
+            reward -= 2000  # extra penalty for dropping the rack
             print("rack reached the motion limit")
 
 
@@ -663,15 +686,14 @@ class MSM_Environment(gym.Env):
         if self.randomize_setpoint:
             self.velocity_setpoint = random.random() * 0.013 + 0.002
         observation = self._get_observation()
-
-        self.velocity_setpoint_list = np.zeros(utils.sequence_length)
-        self.velocity_setpoint_list = np.append(self.velocity_setpoint_list, self.velocity_setpoint)
+        self.environment.collect_velocity_setpoint(self.velocity_setpoint)  # duplicating self.velocity_setpoint_list
+        # self.velocity_setpoint_list = np.zeros(utils.sequence_length)
+        # self.velocity_setpoint_list = np.append(self.velocity_setpoint_list, self.velocity_setpoint)
 
         avg_reward = self.total_reward / self.cur_step
-        MSM_Environment.reward_list.append(avg_reward)
-        # utils.reward_list.append(avg_reward)
-        utils.reward_list = np.append(utils.reward_list, avg_reward)
-        #print("Average reward for the iteration: ", avg_reward)
+
+        self.episode_reward_list = np.append(self.episode_reward_list, avg_reward)
+
         self.total_reward = 0
         self.cur_step = 1
 
@@ -683,6 +705,8 @@ class MSM_Environment(gym.Env):
     def close(self):
         print('close function was called')
         #sim_plant.SimPool.delete_instance(self.plant)
+
+
 
 if __name__ == '__main__':
     # Generate the model
