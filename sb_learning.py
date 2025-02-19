@@ -1,12 +1,13 @@
 import numpy as np
+from torch.utils.checkpoint import checkpoint
 
 import custom_matlab_env
 import msm_model
-# from sb3_contrib import RecurrentPPO
+from sb3_contrib import RecurrentPPO
 from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 from stable_baselines3.common import results_plotter
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 import os
 import mujoco_viewer
 import torch
@@ -28,10 +29,16 @@ class RewardLoggerCallback(BaseCallback):
             print(f"Episode Rewards: {rewards}")
         return True
 
+checkpoint_callback = CheckpointCallback(
+    save_freq=int(5e4),
+    save_path='./sb_neural_networks/3_512_layers_with_5_sets/',
+    name_prefix='3_512_layers'
+)
+
 def make_env():
     global reward_log_list, log_dir
     # if Monitor class is used, access environment via env.get_env()
-    return msm_model.MSM_Environment(randomize_setpoint=True)
+    return msm_model.MSM_Environment(randomize_setpoint=False)
     # return Monitor(msm_model.MSM_Environment(randomize_setpoint=True), log_dir)
 
 def plot_rewards_history(vec_env):
@@ -61,7 +68,7 @@ if __name__ == '__main__':
 
     test_model = False
     model_name = ""  # leave empty if a new model must be trained
-    # model_name = "30000000_network_02_01_25_time_11_25"
+    model_name = "5000000_network_02_19_25_"
     device = 'cpu'
 
     log_dir = 'logs'
@@ -69,9 +76,16 @@ if __name__ == '__main__':
     # path = os.path.join('sb_neural_networks', 'sb_neural_network')
     # env = msm_model.MSM_Environment()  # randomize_setpoint=False
     env = make_env()
+    # policy_kwargs = dict(
+    #     net_arch=[256, 256, 512],  # hidden layers with VALUE neurons each
+    #     activation_fn=torch.nn.ReLU
+    # )
+
     policy_kwargs = dict(
-        net_arch=[256, 256, 512],  # hidden layers with VALUE neurons each
-        activation_fn=torch.nn.ReLU
+        net_arch=dict(pi=[512, 512, 512],
+                      vf=[512, 512, 512]),  # hidden layers with VALUE neurons each
+        #activation_fn=torch.nn.ReLU
+        activation_fn = torch.nn.ELU
     )
 
     if test_model:
@@ -102,25 +116,30 @@ if __name__ == '__main__':
         num_envs = 30  # Number of parallel environments
         vec_env = SubprocVecEnv([make_env for _ in range(num_envs)])  # Or use DummyVecEnv([make_env])
         vec_env = VecMonitor(vec_env)
-        timesteps = int(3e6)
+        timesteps = int(5e6)
         if num_envs == 1:
             vec_env = env
         # Instantiate the agent
         #model = PPO('MlpLstmPolicy', vec_env, learning_rate=1e-3, verbose=1)  # n_steps=10 for rollout. n_step also define minum lear steps
         if model_name == "":
             print("creating new model")
-            # model = RecurrentPPO("MlpLstmPolicy", vec_env, learning_rate=1e-3, verbose=1)
+            # model = RecurrentPPO("MlpLstmPolicy",
+            #                      vec_env,
+            #                      learning_rate=1e-3,
+            #                      verbose=1)
             model = PPO("MlpPolicy",
                         vec_env,
                         device=device,
                         learning_rate=3e-4,
                         policy_kwargs=policy_kwargs,
+                        batch_size=256,
+                        n_steps=4096,
                         verbose=1) # ,
             #model = PPO("MlpPolicy", vec_env, policy_kwargs=policy_kwargs, learning_rate=1e-4, verbose=1)
         else:
             print("Loading model for training")
-            #model = RecurrentPPO.load(os.path.join('sb_neural_networks', model_name))
             model = PPO.load(os.path.join('sb_neural_networks', model_name))
+            #model = PPO.load(os.path.join('sb_neural_networks', model_name))
 
             model.set_env(vec_env)
 
@@ -129,11 +148,12 @@ if __name__ == '__main__':
         # Train the agent
         model.learn(total_timesteps=timesteps,
                     progress_bar=True,
+                    callback=checkpoint_callback
                     #callback=RewardLoggerCallback()
                     )
         # Save the agent
         if model_name == "":
-            model_name = f"{timesteps}_network_" + datetime.now().strftime("%D_time_%H_%M").replace("/", "_")
+            model_name = f"{timesteps}_network_" + datetime.now().strftime("%D_").replace("/", "_")
         else:
             model_name = model_name + "_new"
         model.save(os.path.join('sb_neural_networks', model_name))

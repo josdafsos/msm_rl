@@ -489,6 +489,17 @@ class MSMLinear():
 
     def collect_velocity_setpoint(self, velocity_setpoint):
         self.simulation_data["velocity_setpoint"] = np.append(self.simulation_data["velocity_setpoint"], velocity_setpoint)
+        current_error = self.simulation_data["rack_vel"][-1] - velocity_setpoint
+        previous_error = self.simulation_data["rack_vel"][-2] - self.simulation_data["velocity_setpoint"][-2]
+        error_integral = self.simulation_data["error_integral"][-1] + current_error
+        error_integral = min(1, error_integral)
+        error_integral = max(-1, error_integral)
+        error_derivative = current_error - previous_error
+        self.simulation_data["error_integral"] = np.append(self.simulation_data["error_integral"],
+                                                           error_integral)
+        self.simulation_data["error_derivative"] = np.append(self.simulation_data["error_derivative"],
+                                                             error_derivative)
+
 
     def onstep_computation(self, model=None, data=None):
         """
@@ -527,6 +538,8 @@ class MSMLinear():
             "rack_phase": np.zeros(utils.sequence_length),
             "control_value": np.zeros(utils.sequence_length),
             "velocity_setpoint": np.zeros(utils.sequence_length),
+            "error_integral": np.zeros(utils.sequence_length),
+            "error_derivative": np.zeros(utils.sequence_length),
         }
         self._collect_controller_data()
 
@@ -615,13 +628,15 @@ class MSM_Environment(gym.Env):
 
     def __init__(self, randomize_setpoint=True, return_observation_sequence=False):
         super().__init__()
+
+        self.observation_set_cnt = 5  # number of consecutive observation steps to be stuck together (minimum is 1)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(utils.features_cnt,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(utils.features_cnt * self.observation_set_cnt,), dtype=np.float32)
         self.environment = MSMLinear(tb_type=1,
                                 controller_type="closed_loop")
 
         self.simulation_time = 0.05  # seconds
-        self.velocity_setpoint = 0.002
+        self.velocity_setpoint = 0.004
         self.velocity_setpoint_list = np.array([])
         self.randomize_setpoint = randomize_setpoint
         self.cur_step = 1
@@ -645,12 +660,17 @@ class MSM_Environment(gym.Env):
             ]
             obs = np.transpose(np.array(obs))
         else:
-            obs = [
-                           self.environment.simulation_data["rack_phase"][-1],
-                           self.environment.simulation_data["rack_vel"][-1],
-                           self.environment.simulation_data["rack_tanh_acc"][-1],
-                           self.velocity_setpoint
-                           ]
+            obs = []
+            for i in range(1, self.observation_set_cnt + 1):
+                sub_obs = [
+                               self.environment.simulation_data["rack_phase"][-i],
+                               self.environment.simulation_data["rack_vel"][-i],
+                               self.environment.simulation_data["rack_tanh_acc"][-i],
+                               self.environment.simulation_data["velocity_setpoint"][-i],
+                               self.environment.simulation_data["error_integral"][-i],
+                               self.environment.simulation_data["error_derivative"][-i]
+                               ]
+                obs.extend(sub_obs)
         return obs
 
     def step(self, action):
@@ -660,7 +680,7 @@ class MSM_Environment(gym.Env):
         observation = self._get_observation()
         # reward = -(self.velocity_setpoint - self.environment.simulation_data["rack_vel"][-1]) ** 2
         reward = -( ((self.velocity_setpoint - self.environment.simulation_data["rack_vel"][-1]) * 1000) **2 ) \
-                 * (1 + abs(float(action)))
+                 * (0.1 + abs(float(action)))
 
         # in gym truncated is responsible for termination based on the time steps limit.
         # But since there is no other termination option in MSM sim (termination based on rack flying away is too rare), using termination flag is reasonable here

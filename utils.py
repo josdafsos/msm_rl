@@ -15,7 +15,10 @@ NN_WORKING_PERIOD = 1 / NN_WORKING_FREQUENCY  # seconds, period of calling contr
 #                       'desired_velocity']
 feature_columns = ['mod_rack_position', 'rack_velocity', 'tahn_rack_acceleration',
                        'desired_velocity']
-features_cnt = len(feature_columns)
+feature_columns_extended = ['mod_rack_position', 'rack_velocity', 'tahn_rack_acceleration',
+                       'desired_velocity', 'error_integral', 'error_derivative']
+#features_cnt = len(feature_columns)
+features_cnt = len(feature_columns_extended)
 sequence_length = 25
 
 
